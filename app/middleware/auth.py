@@ -1,5 +1,6 @@
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import traceback
 
 from app.database.dependencies import get_admin_client, get_jwt_token
 
@@ -36,8 +37,10 @@ async def get_current_user(
 
         return response.user
 
-    except Exception:
+    except Exception as e:
+        traceback.print_exc()
+
         raise HTTPException(
             status_code=401,
-            detail="Authentication failed.",
+            detail=str(e),
         )
