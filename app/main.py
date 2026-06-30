@@ -3,12 +3,17 @@ from fastapi.openapi.utils import get_openapi
 
 from app.api.v1.router import api_router
 from app.core.settings import settings
+from app.core.lifespan import lifespan
+from app.core.cors import configure_cors
 
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="AI-powered Claim Processing Platform",
+    lifespan=lifespan,
 )
+
+configure_cors(app)
 
 
 def custom_openapi():

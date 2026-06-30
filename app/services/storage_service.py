@@ -7,6 +7,7 @@ Responsibilities:
 - Upload files
 - Delete files
 - Generate storage paths
+- Generate signed download URLs
 - Validate storage operations
 
 This service does NOT create database records.
@@ -16,13 +17,11 @@ That responsibility belongs to DocumentService.
 from __future__ import annotations
 
 import os
-from datetime import datetime
-from typing import BinaryIO
 
-from fastapi import UploadFile
 from supabase import Client
 
-from app.exceptions import ValidationError
+from app.database.client import create_admin_client
+from app.exceptions import DatabaseError, ValidationError
 
 
 class StorageService:
@@ -45,10 +44,13 @@ class StorageService:
         filename: str,
     ) -> str:
         """
-        Generate the storage path for a document.
+        Generate a safe storage path.
 
         Example:
-        claim-files/user_uuid/claim_uuid/receipt.pdf
+
+            user_uuid/
+                claim_uuid/
+                    receipt.pdf
         """
 
         safe_name = os.path.basename(filename)
@@ -70,8 +72,10 @@ class StorageService:
         """
         Upload a file to Supabase Storage.
 
-        Returns:
-            The storage path.
+        Returns
+        -------
+        str
+            Storage path.
         """
 
         storage_path = self.generate_storage_path(
@@ -80,16 +84,27 @@ class StorageService:
             filename=filename,
         )
 
-        self.storage.from_(self.BUCKET_NAME).upload(
-            path=storage_path,
-            file=file_bytes,
-            file_options={
-                "content-type": content_type,
-                "upsert": False,
-            },
-        )
+        try:
+            # NOTE:
+            # Keep using the admin client until Storage RLS
+            # is fully configured for authenticated uploads.
+            admin = create_admin_client()
 
-        return storage_path
+            admin.storage.from_(self.BUCKET_NAME).upload(
+                path=storage_path,
+                file=file_bytes,
+                file_options={
+                    "content-type": content_type,
+                    "upsert": False,
+                },
+            )
+
+            return storage_path
+
+        except Exception as exc:
+            raise DatabaseError(
+                "Failed to upload document to storage."
+            ) from exc
 
     def delete_file(
         self,
@@ -99,24 +114,97 @@ class StorageService:
         Delete a file from Supabase Storage.
         """
 
-        self.storage.from_(self.BUCKET_NAME).remove(
-            [storage_path]
-        )
+        try:
+            self.storage.from_(self.BUCKET_NAME).remove(
+                [storage_path]
+            )
+
+        except Exception as exc:
+            raise DatabaseError(
+                "Failed to delete document from storage."
+            ) from exc
+
+    def create_signed_url(
+        self,
+        storage_path: str,
+        expires_in: int = 300,
+    ) -> str:
+        """
+        Generate a temporary signed download URL.
+
+        Parameters
+        ----------
+        storage_path:
+            Path stored in claim_documents.storage_path.
+
+        expires_in:
+            Expiry time in seconds.
+
+        Returns
+        -------
+        str
+            Signed download URL.
+        """
+
+        try:
+            response = (
+                self.storage
+                .from_(self.BUCKET_NAME)
+                .create_signed_url(
+                    storage_path,
+                    expires_in,
+                )
+            )
+
+            if isinstance(response, str):
+                return response
+
+            if isinstance(response, dict):
+                url = (
+                    response.get("signedURL")
+                    or response.get("signed_url")
+                    or response.get("url")
+                )
+
+                if url:
+                    return url
+
+            if hasattr(response, "signedURL"):
+                return response.signedURL
+
+            if hasattr(response, "signed_url"):
+                return response.signed_url
+
+            raise DatabaseError(
+                "Supabase returned an invalid signed URL response."
+            )
+
+        except Exception as exc:
+            raise DatabaseError(
+                "Failed to generate signed download URL."
+            ) from exc
 
     def get_public_url(
         self,
         storage_path: str,
     ) -> str:
         """
-        Returns the storage URL.
+        Return the public URL.
 
-        The bucket is private, so this is mainly useful
-        if signed URLs are added later.
+        Useful only if the bucket becomes public.
         """
 
-        return self.storage.from_(self.BUCKET_NAME).get_public_url(
-            storage_path
-        )
+        try:
+            return (
+                self.storage
+                .from_(self.BUCKET_NAME)
+                .get_public_url(storage_path)
+            )
+
+        except Exception as exc:
+            raise DatabaseError(
+                "Failed to generate public URL."
+            ) from exc
 
     @staticmethod
     def validate_file_size(
@@ -126,8 +214,13 @@ class StorageService:
         """
         Validate maximum file size.
 
-        Default: 10 MB
+        Default: 10 MB.
         """
+
+        if file_size <= 0:
+            raise ValidationError(
+                "Uploaded file is empty."
+            )
 
         if file_size > max_size:
             raise ValidationError(
@@ -136,11 +229,16 @@ class StorageService:
 
     @staticmethod
     def validate_content_type(
-        content_type: str,
+        content_type: str | None,
     ) -> None:
         """
         Validate supported MIME types.
         """
+
+        if not content_type:
+            raise ValidationError(
+                "Missing content type."
+            )
 
         allowed_types = {
             "application/pdf",

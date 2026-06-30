@@ -12,7 +12,7 @@ from supabase import Client
 from app.core.logger import get_logger
 from app.exceptions import DatabaseError, NotFoundError, ValidationError
 from app.services.base_service import BaseService
-
+from app.services.ai_service import AIService
 
 class ClaimService(BaseService):
     """
@@ -29,7 +29,10 @@ class ClaimService(BaseService):
     def __init__(self, db_client: Client):
         """Initialize service with a user-scoped database client."""
         super().__init__(db_client)
+
         self.logger = get_logger(__name__)
+
+        self.ai = AIService()
 
     def create_claim(self, user_id: str, claim_data: dict) -> dict:
         """
@@ -62,9 +65,16 @@ class ClaimService(BaseService):
             return claim
         except ValidationError:
             raise
+        except DatabaseError:
+            raise
         except Exception as exc:
-            self.logger.error("Claim creation failed: user_id=%s error=%s", user_id, exc)
-            raise DatabaseError("Unable to create claim.") from exc
+            self.logger.error(
+                "Claim creation failed: user_id=%s error=%s",
+                user_id,
+                exc,
+                exc_info=True,
+            )
+            raise DatabaseError(f"Unable to create claim: {exc}") from exc
 
     def list_claims(self, user_id: str) -> list[dict]:
         """
@@ -163,6 +173,155 @@ class ClaimService(BaseService):
             self.logger.error("Claim delete failed: claim_id=%s error=%s", claim_id, exc)
             raise DatabaseError("Unable to delete claim.") from exc
 
+
+    def analyze_claim(
+            self,
+            claim_id: str,
+        ) -> dict:
+            """
+            Analyze all OCR text belonging to a claim using Groq AI.
+            """
+
+            # -----------------------------
+            # Verify claim exists
+            # -----------------------------
+
+            self._get_active_claim(claim_id)
+
+            # -----------------------------
+            # Load OCR documents
+            # -----------------------------
+
+            try:
+
+                response = (
+                    self.db_client
+                    .table("claim_documents")
+                    .select(
+                        "id, extracted_text"
+                    )
+                    .eq("claim_id", claim_id)
+                    .is_("deleted_at", "null")
+                    .execute()
+                )
+
+            except Exception as exc:
+
+                raise DatabaseError(
+                    "Unable to load claim documents."
+                ) from exc
+
+            documents = response.data or []
+
+            if not documents:
+                raise ValidationError(
+                    "No documents uploaded for this claim."
+                )
+
+            # -----------------------------
+            # Merge OCR text
+            # -----------------------------
+
+            merged_text = []
+
+            for document in documents:
+
+                text = (
+                    document.get("extracted_text")
+                    or ""
+                ).strip()
+
+                if text:
+                    merged_text.append(text)
+
+            if not merged_text:
+
+                raise ValidationError(
+                    "No OCR text found. Run OCR first."
+                )
+
+            full_text = "\n\n".join(
+                merged_text
+            )
+
+            # -----------------------------
+            # Call AI
+            # -----------------------------
+
+            ai_result = self.ai.analyze(
+                full_text
+            )
+
+            # -----------------------------
+            # Save analysis
+            # -----------------------------
+
+            # Build update payload — only include columns that exist in the DB.
+            # structured_data and ai_processed_at require migration 004 to be run.
+            update_payload: dict = {
+                "ai_summary": ai_result.summary,
+                "readiness_score": ai_result.readiness_score,
+            }
+
+            # Attempt to save extended AI columns (added in migration 004).
+            # If the columns don't exist yet, fall back gracefully.
+            extended_payload = {
+                **update_payload,
+                "structured_data": ai_result.structured_data.model_dump(),
+                "ai_processed_at": self._current_timestamp(),
+            }
+
+            try:
+                response = (
+                    self.db_client
+                    .table(self.TABLE_NAME)
+                    .update(extended_payload)
+                    .eq("id", claim_id)
+                    .execute()
+                )
+
+            except APIError as exc:
+                # Column likely missing — retry with base payload only.
+                self.logger.warning(
+                    "Extended AI columns unavailable, retrying with base payload: %s",
+                    exc,
+                )
+                try:
+                    response = (
+                        self.db_client
+                        .table(self.TABLE_NAME)
+                        .update(update_payload)
+                        .eq("id", claim_id)
+                        .execute()
+                    )
+                except Exception as exc2:
+                    raise DatabaseError(
+                        f"Unable to save AI analysis: {exc2}"
+                    ) from exc2
+
+            except Exception as exc:
+                raise DatabaseError(
+                    f"Unable to save AI analysis: {exc}"
+                ) from exc
+
+            claim = self._first_row(
+                response.data
+            )
+
+            if not claim:
+                raise DatabaseError(
+                    "AI analysis could not be saved."
+                )
+
+            self.logger.info(
+                "Claim analyzed successfully: %s",
+                claim_id,
+            )
+
+            return {
+                "claim": claim,
+                "analysis": ai_result.model_dump(),
+            }
     def _get_active_claim(self, claim_id: str) -> dict:
         """Fetch a claim that has not been soft deleted."""
         try:

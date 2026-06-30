@@ -19,7 +19,7 @@ async def register(
 ):
     """
     Register a new user.
-    
+
     Creates a new user in Supabase Auth and initializes their profile.
     Uses admin client since this is a user creation operation (system-level).
     """
@@ -48,24 +48,34 @@ async def login(
 ):
     """
     Authenticate a user and return session.
-    
+
     Validates credentials and returns a JWT session token.
     Uses admin client for the authentication operation (system-level).
     """
     try:
         auth_service = AuthService(db_client)
-        session = auth_service.login(
+        # sign_in_with_password returns AuthResponse(user=..., session=Session(...))
+        auth_response = auth_service.login(
             request.email,
             request.password,
         )
 
+        if auth_response.session is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication failed: no session returned.",
+            )
+
+        # Return the Session object (contains access_token, refresh_token, etc.)
         return success_response(
             message="Login successful.",
-            data=session.model_dump(),
+            data=auth_response.session.model_dump(),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=401,
             detail=str(e),
-        )
+        )

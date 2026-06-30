@@ -22,7 +22,10 @@ class DocumentResponse(BaseModel):
     storage_path: str
     document_type: str
     upload_status: str
+
     extracted_text: str | None = None
+    ocr_confidence: float | None = None
+
     created_at: datetime
     updated_at: datetime
 
@@ -52,6 +55,14 @@ class UploadDocumentResult(BaseModel):
 
     This model is used by the service layer before the API response
     wrapper formats the final HTTP response.
+    """
+
+    document: DocumentResponse
+
+
+class OCRResultResponse(BaseModel):
+    """
+    Response returned after OCR extraction.
     """
 
     document: DocumentResponse

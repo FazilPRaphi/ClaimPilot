@@ -204,6 +204,19 @@ class DocumentServiceTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.query.filters[0], ("eq", "id", "doc-1"))
         self.assertIn("deleted_at", client.query.update_payload)
 
+    def test_normalize_document_id_strips_quotes(self) -> None:
+        """UUIDs wrapped in quotes are normalized before database filters."""
+        service = DocumentService(FakeClient([[]]))
+
+        normalized = service._normalize_document_id(
+            '"6163f707-0c3b-4c73-b62a-2a37013c6a0a"'
+        )
+
+        self.assertEqual(
+            normalized,
+            "6163f707-0c3b-4c73-b62a-2a37013c6a0a",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

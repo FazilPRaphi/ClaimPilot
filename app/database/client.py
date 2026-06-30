@@ -1,4 +1,5 @@
 from supabase import Client, create_client
+from supabase.client import ClientOptions
 
 from app.core.settings import settings
 
@@ -49,14 +50,13 @@ def create_user_client(jwt_token: str) -> Client:
     Returns:
         A Supabase Client instance configured for the user context
     """
-    client = create_client(
+    options = ClientOptions()
+
+    if jwt_token:
+        options.headers["Authorization"] = f"Bearer {jwt_token}"
+
+    return create_client(
         settings.SUPABASE_URL,
         settings.SUPABASE_ANON_KEY,
+        options=options,
     )
-    
-    # Inject JWT into request headers for RLS policy evaluation
-    # The database uses the JWT claims to determine row access
-    if jwt_token:
-        client.postgrest.auth(jwt_token)
-    
-    return client

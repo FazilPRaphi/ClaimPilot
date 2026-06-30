@@ -25,13 +25,19 @@ class Settings(BaseSettings):
     # Security
     # ----------------------------
     SECRET_KEY: str
+
     # ----------------------------
     # Supabase
     # ----------------------------
-
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
+
+    # ----------------------------
+    # Groq AI
+    # ----------------------------
+    GROQ_API_KEY: str
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
     model_config = SettingsConfigDict(
         env_file=".env",
