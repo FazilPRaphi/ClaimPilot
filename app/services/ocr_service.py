@@ -13,6 +13,8 @@ Responsibilities
 from __future__ import annotations
 
 import io
+import os
+from platform import platform
 import tempfile
 import time
 from pathlib import Path
@@ -35,9 +37,19 @@ class OCRService:
 
     TESSERACT_CONFIG = "--oem 3 --psm 6"
 
-    def __init__(self):
-        pytesseract.pytesseract.tesseract_cmd = (
+def __init__(self):
+    """
+        Configure the Tesseract executable based on the OS.
+    """
+
+    if platform.system() == "Windows":
+            pytesseract.pytesseract.tesseract_cmd = (
             r"D:\Program Files\Tesseract-OCR\tesseract.exe"
+        )
+    else:
+            pytesseract.pytesseract.tesseract_cmd = os.getenv(
+            "TESSERACT_CMD",
+            "/usr/bin/tesseract",
         )
 
     def extract_text(
